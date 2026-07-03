@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: safebeacon-backend
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- Supabase (pegar los valores en el dashboard de Render, NO commitear) ---
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY  # SECRETO — service_role, bypassa RLS
+        sync: false
+      - key: NODE_VERSION
+        value: "20"
+      # PORT lo inyecta Render automáticamente; el server ya lee process.env.PORT.

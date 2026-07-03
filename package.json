@@ -1,0 +1,40 @@
+{
+  "name": "safebeacon-backend",
+  "version": "1.0.0",
+  "description": "Backend del sistema de botón de pánico SafeBeacon — recibe alertas del ESP32-C3 y las reenvía a Telegram con geolocalización GPS.",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "safebeacon",
+    "esp32",
+    "panic-button",
+    "telegram",
+    "tecsup"
+  ],
+  "author": "SafeBeacon — TECSUP",
+  "license": "MIT",
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@supabase/supabase-js": "^2.45.4",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "dotenv": "^16.6.1",
+    "hono": "^4.6.14",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
