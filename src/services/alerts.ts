@@ -1,5 +1,6 @@
 import { admin } from "../lib/supabase.js";
 import { waManager } from "./wa-manager.js";
+import { sendTelegram, telegramConfigured } from "./telegram.js";
 import { alertFields } from "../lib/format.js";
 import { log } from "../lib/log.js";
 import type { Alert } from "../lib/schemas.js";
@@ -9,10 +10,18 @@ export interface AlertInput extends Alert {
 }
 
 export interface DeliveryEntry {
+  channel: "whatsapp" | "telegram";
   phone: string;
   ok: boolean;
   message_id?: string;
+  status?: string; // acuse: enviado | entregado | leído
   error?: string;
+}
+
+interface ContactRow {
+  name: string;
+  phone: string;
+  telegram_chat_id: string | null;
 }
 
 export interface AlertOutcome {
@@ -23,6 +32,7 @@ export interface AlertOutcome {
   wa_connected?: boolean;
   queued?: number;
   total?: number;
+  telegram_targets?: number;
 }
 
 /** Mensaje WhatsApp Markdown, personalizado con el nombre del usuario. */
@@ -45,6 +55,26 @@ function buildMessage(name: string | null, alert: Alert): string {
   ].join("\n");
 }
 
+/** Mismo mensaje en HTML para Telegram (parse_mode HTML). */
+function buildTelegramMessage(name: string | null, alert: Alert): string {
+  const { horaLima, maps } = alertFields(alert);
+  const safe = (name ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const quien = name
+    ? `<b>${safe}</b> activó su botón de pánico.`
+    : "Se activó un botón de pánico.";
+  return [
+    "🚨 <b>ALERTA SAFEBEACON</b>",
+    "",
+    quien,
+    "",
+    `📍 <a href="${maps}">Ver ubicación en Google Maps</a>`,
+    "",
+    `<b>Batería:</b> ${alert.battery_pct}%`,
+    `<b>Hora:</b> ${horaLima} (Lima, GMT-5)`,
+    `<b>Coordenadas:</b> ${alert.lat}, ${alert.lng}`,
+  ].join("\n");
+}
+
 /**
  * Envía la alerta a los contactos en SEGUNDO PLANO y luego actualiza
  * la fila de la alerta con el resultado de entrega. No se espera (fire-and-forget)
@@ -55,33 +85,55 @@ async function dispatchDelivery(
   alertId: string,
   name: string | null,
   alert: Alert,
-  contacts: { name: string; phone: string }[]
+  contacts: ContactRow[]
 ): Promise<void> {
   const delivery: DeliveryEntry[] = [];
-  const text = buildMessage(name, alert);
+  const waText = buildMessage(name, alert);
+  const tgText = buildTelegramMessage(name, alert);
+  const waReady = waManager.isConnected(userId);
+  const tgReady = telegramConfigured();
 
   for (const c of contacts) {
-    try {
-      const jid = await waManager.resolveJid(userId, c.phone);
-      if (!jid) {
+    // --- Canal WhatsApp ---
+    if (waReady) {
+      try {
+        const jid = await waManager.resolveJid(userId, c.phone);
+        if (!jid) {
+          delivery.push({
+            channel: "whatsapp",
+            phone: c.phone,
+            ok: false,
+            error: "No registrado en WhatsApp",
+          });
+        } else {
+          const sent = await waManager.sendText(userId, jid, waText);
+          delivery.push({
+            channel: "whatsapp",
+            phone: c.phone,
+            ok: true,
+            status: "enviado",
+            message_id: sent?.key?.id ?? undefined,
+          });
+        }
+      } catch (err) {
         delivery.push({
+          channel: "whatsapp",
           phone: c.phone,
           ok: false,
-          error: "No registrado en WhatsApp",
+          error: err instanceof Error ? err.message : String(err),
         });
-        continue;
       }
-      const sent = await waManager.sendText(userId, jid, text);
+    }
+
+    // --- Canal Telegram (respaldo) ---
+    if (tgReady && c.telegram_chat_id) {
+      const ok = await sendTelegram(c.telegram_chat_id, tgText);
       delivery.push({
+        channel: "telegram",
         phone: c.phone,
-        ok: true,
-        message_id: sent?.key?.id ?? undefined,
-      });
-    } catch (err) {
-      delivery.push({
-        phone: c.phone,
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        ok,
+        status: ok ? "entregado" : undefined,
+        error: ok ? undefined : "Telegram rechazó el envío",
       });
     }
   }
@@ -99,7 +151,8 @@ async function dispatchDelivery(
     user_id: userId,
     alert_id: alertId,
     sent: delivery.filter((d) => d.ok).length,
-    total: contacts.length,
+    attempts: delivery.length,
+    contacts: contacts.length,
   });
 }
 
@@ -133,12 +186,12 @@ export async function handleAlert(input: AlertInput): Promise<AlertOutcome> {
     admin.from("profiles").select("full_name").eq("id", userId).maybeSingle(),
     admin
       .from("emergency_contacts")
-      .select("name, phone")
+      .select("name, phone, telegram_chat_id")
       .eq("user_id", userId)
       .order("priority", { ascending: true }),
   ]);
 
-  const contactList = (contacts ?? []) as { name: string; phone: string }[];
+  const contactList = (contacts ?? []) as ContactRow[];
 
   // last_seen del dispositivo (no bloqueante)
   admin
@@ -172,9 +225,12 @@ export async function handleAlert(input: AlertInput): Promise<AlertOutcome> {
 
   const alertId = alertRow.id as string;
   const waConnected = waManager.isConnected(userId);
+  const tgReady = telegramConfigured();
+  const canDeliver = waConnected || tgReady;
 
-  // 4. Disparar el envío por WhatsApp en segundo plano (no se espera)
-  if (waConnected && contactList.length > 0) {
+  // 4. Disparar el envío en segundo plano (no se espera) por los canales
+  //    disponibles: WhatsApp y/o Telegram (respaldo).
+  if (canDeliver && contactList.length > 0) {
     void dispatchDelivery(
       userId,
       alertId,
@@ -189,10 +245,13 @@ export async function handleAlert(input: AlertInput): Promise<AlertOutcome> {
     );
   }
 
+  const tgTargets = contactList.filter((c) => c.telegram_chat_id).length;
+
   log("info", "alert_received", {
     user_id: userId,
     device_id: input.device_id,
     wa_connected: waConnected,
+    telegram: tgReady,
     contacts: contactList.length,
   });
 
@@ -201,7 +260,8 @@ export async function handleAlert(input: AlertInput): Promise<AlertOutcome> {
     code: 200,
     alert_id: alertId,
     wa_connected: waConnected,
-    queued: waConnected ? contactList.length : 0,
+    queued: canDeliver ? contactList.length : 0,
     total: contactList.length,
+    telegram_targets: tgTargets,
   };
 }

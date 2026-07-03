@@ -16,6 +16,9 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY  # SECRETO — service_role, bypassa RLS
         sync: false
+      # --- Telegram (canal de respaldo) — token de @BotFather, opcional ---
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
       - key: NODE_VERSION
         value: "20"
       # PORT lo inyecta Render automáticamente; el server ya lee process.env.PORT.

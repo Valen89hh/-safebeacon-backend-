@@ -4,7 +4,9 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { alertRoutes } from "./routes/alert.js";
 import { sessionRoutes } from "./routes/session.js";
+import { telegramRoutes } from "./routes/telegram.js";
 import { waManager } from "./services/wa-manager.js";
+import { startTelegramBot } from "./services/telegram.js";
 import { log } from "./lib/log.js";
 
 const START_TIME = Date.now();
@@ -26,6 +28,7 @@ app.get("/health", (c) =>
 // Rutas
 app.route("/api", alertRoutes); // /api/alert, /api/test
 app.route("/api/session", sessionRoutes); // /api/session/start|status|logout
+app.route("/api/telegram", telegramRoutes); // /api/telegram/info
 
 const port = Number(process.env.PORT ?? 3000);
 
@@ -41,4 +44,7 @@ serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
       error: err instanceof Error ? err.message : String(err),
     })
   );
+
+  // Bot de Telegram (canal de respaldo): escucha auto-registros por deep-link.
+  startTelegramBot();
 });
