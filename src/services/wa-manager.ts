@@ -44,6 +44,26 @@ interface Session {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Traduce el status numérico de un mensaje de WhatsApp (Baileys/WAProto) a
+ * una etiqueta legible. Solo nos interesan los estados >= SERVER_ACK.
+ * Enum: ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5.
+ */
+function waStatusLabel(status: number): string | null {
+  switch (status) {
+    case 2:
+      return "enviado";
+    case 3:
+      return "entregado";
+    case 4:
+      return "leído";
+    case 5:
+      return "reproducido";
+    default:
+      return null;
+  }
+}
+
+/**
  * Maneja una sesión Baileys por usuario (Modelo A).
  * Patrones reusados de addo-whatsapp: QR, reconexión con backoff,
  * creds.update -> saveCreds, manejo de loggedOut.
@@ -203,6 +223,26 @@ class WAManager {
     this.sessions.set(userId, session);
 
     socket.ev.on("creds.update", saveCreds);
+
+    // Acuses de recibo: WhatsApp informa cuando un mensaje pasa a
+    // enviado/entregado/leído. Actualizamos el estado en la alerta
+    // correspondiente (por message_id) para verlo en el panel web.
+    socket.ev.on("messages.update", async (updates) => {
+      for (const u of updates) {
+        if (!u.key?.fromMe) continue; // solo nuestros mensajes salientes
+        const id = u.key?.id;
+        const status = (u.update as { status?: number } | undefined)?.status;
+        if (!id || status == null) continue;
+        const label = waStatusLabel(status);
+        if (!label) continue;
+        await admin
+          .rpc("set_delivery_status", { p_message_id: id, p_status: label })
+          .then(
+            () => {},
+            () => {}
+          );
+      }
+    });
 
     socket.ev.on(
       "connection.update",
