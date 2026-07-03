@@ -1,4 +1,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import ws from "ws";
+
+// @supabase/supabase-js (realtime-js) exige un WebSocket global. En Node < 22
+// no existe, así que se lo proveemos explícitamente vía la opción realtime.transport.
+// (El backend no usa realtime, pero el cliente lo inicializa al construirse.)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const realtimeOpts = { transport: ws as any };
 
 const url = process.env.SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -29,6 +36,7 @@ export const admin: SupabaseClient = createClient(
   serviceKey || "placeholder-service-key",
   {
     auth: { persistSession: false, autoRefreshToken: false },
+    realtime: realtimeOpts,
   }
 );
 
@@ -45,6 +53,7 @@ export async function getUserFromToken(
   if (!url || !anonKey || !token) return null;
   const client = createClient(url, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    realtime: realtimeOpts,
   });
   const { data, error } = await client.auth.getUser(token);
   if (error || !data.user) return null;
